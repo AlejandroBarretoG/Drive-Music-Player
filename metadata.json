@@ -1,0 +1,5 @@
+{
+  "name": "Drive Music Player",
+  "description": "A modern, aesthetic music player designed to stream audio directly from Google Drive links.",
+  "requestFramePermissions": []
+}
