@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { AudioPlayer } from './components/AudioPlayer';
 import { Music, Disc, KeyRound } from 'lucide-react';
@@ -20,26 +21,12 @@ const App: React.FC = () => {
   const [currentTrackIndex, setCurrentTrackIndex] = useState(0);
 
   const currentTrack = PLAYLIST[currentTrackIndex];
-  const fileId = currentTrack.id;
   
   // ---------------------------------------------------------------------------
   // API KEY CONFIGURATION
   // ---------------------------------------------------------------------------
   const GOOGLE_DRIVE_API_KEY: string = "AIzaSyB9IR6S_XDeHdqWQUsfwNE55S7LazuflOw";
   
-  // Logic to select the best streaming method
-  let streamUrl = "";
-  let usingApi = false;
-
-  if (GOOGLE_DRIVE_API_KEY && GOOGLE_DRIVE_API_KEY.length > 10) {
-    // MÉTODO OFICIAL (Estable): Usa la API de Google Drive v3
-    streamUrl = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&key=${GOOGLE_DRIVE_API_KEY}`;
-    usingApi = true;
-  } else {
-    // MÉTODO ALTERNATIVO (Inestable)
-    streamUrl = `https://drive.google.com/uc?export=download&id=${fileId}&confirm=t`;
-  }
-
   const handleNextTrack = () => {
     setCurrentTrackIndex((prev) => (prev + 1) % PLAYLIST.length);
   };
@@ -64,9 +51,9 @@ const App: React.FC = () => {
             <Music size={20} />
             <div className="flex flex-col items-center">
               <span className="text-xs uppercase tracking-widest font-semibold">Reproductor Drive</span>
-              {usingApi && (
+              {GOOGLE_DRIVE_API_KEY && (
                 <span className="text-[10px] text-green-400 flex items-center gap-1">
-                  <KeyRound size={8} /> Modo API
+                  <KeyRound size={8} /> API Activa
                 </span>
               )}
             </div>
@@ -75,7 +62,8 @@ const App: React.FC = () => {
 
           {/* Player Component */}
           <AudioPlayer 
-            src={streamUrl} 
+            fileId={currentTrack.id}
+            apiKey={GOOGLE_DRIVE_API_KEY}
             trackTitle={currentTrack.title} 
             trackArtist={currentTrack.artist}
             onNextTrack={handleNextTrack}

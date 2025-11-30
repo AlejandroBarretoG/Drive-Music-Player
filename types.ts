@@ -1,5 +1,8 @@
+
 export interface AudioPlayerProps {
-  src: string;
+  src?: string; // Optional now as we generate it internally
+  fileId: string;
+  apiKey?: string;
   trackTitle?: string;
   trackArtist?: string;
   onNextTrack?: () => void;

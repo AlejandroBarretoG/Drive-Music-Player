@@ -1,12 +1,14 @@
+
 import React, { useRef, useState, useEffect } from 'react';
 import { AudioPlayerProps } from '../types';
 import { Controls } from './Controls';
 import { ProgressBar } from './ProgressBar';
 import { VolumeControl } from './VolumeControl';
-import { AlertCircle, Loader2, ExternalLink } from 'lucide-react';
+import { AlertCircle, Loader2, ExternalLink, RefreshCw } from 'lucide-react';
 
 export const AudioPlayer: React.FC<AudioPlayerProps> = ({ 
-  src, 
+  fileId,
+  apiKey,
   trackTitle = "Unknown Track", 
   trackArtist = "Unknown Artist",
   onNextTrack,
@@ -14,34 +16,68 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 }) => {
   const audioRef = useRef<HTMLAudioElement>(null);
   
+  // State for playback
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
+  
+  // State for loading and errors
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
+  // State for URL retry logic
+  const [currentUrlIndex, setCurrentUrlIndex] = useState(0);
+  const [activeSrc, setActiveSrc] = useState<string>('');
 
-  // Reset and autoplay when src changes
+  // Define strategies for URL generation
+  // We reconstruct this whenever fileId or apiKey changes
+  const urlStrategies = React.useMemo(() => {
+    const strategies = [];
+    
+    // Strategy 1: Google Drive API (Best if key works)
+    if (apiKey && apiKey.length > 5) {
+      strategies.push(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&key=${apiKey}`);
+    }
+    
+    // Strategy 2: Standard Drive Download (Often works for public files)
+    strategies.push(`https://drive.google.com/uc?export=download&id=${fileId}&confirm=t`);
+    
+    // Strategy 3: Docs export (Alternate domain sometimes bypasses blocks)
+    strategies.push(`https://docs.google.com/uc?export=download&id=${fileId}&confirm=t`);
+
+    return strategies;
+  }, [fileId, apiKey]);
+
+  // Reset when track changes
   useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
+    setCurrentUrlIndex(0);
+    setActiveSrc(urlStrategies[0]);
     setIsLoading(true);
     setError(null);
-    setIsPlaying(true); // Try to autoplay when track changes
+    setIsPlaying(false);
     
-    const playPromise = audio.play();
-    if (playPromise !== undefined) {
-      playPromise.catch(e => {
-        // Auto-play might be blocked by browser
-        console.log("Autoplay prevented:", e);
-        setIsPlaying(false);
-      });
-    }
+    // Small timeout to allow render cycle to update audio src before playing
+    const timer = setTimeout(() => {
+      if (audioRef.current) {
+        // Attempt autoplay
+        const playPromise = audioRef.current.play();
+        if (playPromise !== undefined) {
+          playPromise
+            .then(() => setIsPlaying(true))
+            .catch(e => {
+              console.log("Autoplay prevented or waiting for user interaction", e);
+              setIsPlaying(false);
+            });
+        }
+      }
+    }, 100);
 
-  }, [src]);
+    return () => clearTimeout(timer);
+  }, [fileId, urlStrategies]);
 
+  // Standard audio event listeners
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
@@ -49,7 +85,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     const setAudioData = () => {
       setDuration(audio.duration);
       setIsLoading(false);
-      setError(null);
+      setError(null); // Clear error if success
     };
 
     const setAudioTime = () => setCurrentTime(audio.currentTime);
@@ -67,29 +103,38 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     const handleError = (e: Event) => {
         setIsLoading(false);
         const audioEl = e.target as HTMLAudioElement;
-        console.warn("Audio error occurred:", audioEl.error);
+        console.warn(`Audio error on attempt ${currentUrlIndex + 1}:`, audioEl.error);
         
-        let errorMessage = "No se pudo cargar el audio.";
-        if (audioEl.error) {
-          switch (audioEl.error.code) {
-            case MediaError.MEDIA_ERR_ABORTED:
-              errorMessage = "La reproducción fue interrumpida.";
-              break;
-            case MediaError.MEDIA_ERR_NETWORK:
-              errorMessage = "Error de red al intentar conectar con Drive.";
-              break;
-            case MediaError.MEDIA_ERR_DECODE:
-              errorMessage = "El navegador no pudo decodificar el archivo de audio.";
-              break;
-            case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
-              errorMessage = "Drive bloqueó la reproducción (Error 403/404).";
-              break;
-            default:
-              errorMessage = "Error desconocido.";
+        // Retry logic
+        if (currentUrlIndex < urlStrategies.length - 1) {
+          console.log("Retrying with next strategy...");
+          const nextIndex = currentUrlIndex + 1;
+          setCurrentUrlIndex(nextIndex);
+          setActiveSrc(urlStrategies[nextIndex]);
+          setIsLoading(true);
+          // Audio element will reload automatically when src changes
+          // We'll try to resume playing in the useEffect dependent on activeSrc? 
+          // Actually, simply changing state triggers re-render, src updates.
+          // We need to trigger load() or play() after update, usually handled by auto-play logic or user.
+          // Let's force play in a separate effect or just let user click if autoplay fails.
+          // Ideally, we want seamless retry.
+          setTimeout(() => {
+              if (audioRef.current && isPlaying) {
+                  audioRef.current.play().catch(() => setIsPlaying(false));
+              }
+          }, 500);
+        } else {
+          // All strategies failed
+          let errorMessage = "No se pudo cargar el audio.";
+          if (audioEl.error) {
+             // Specific error mapping...
+             if (audioEl.error.code === 4 || audioEl.error.code === 3) {
+                 errorMessage = "Drive bloqueó la reproducción. Verifica que el archivo sea 'Público'.";
+             }
           }
+          setError(errorMessage);
+          setIsPlaying(false);
         }
-        setError(errorMessage);
-        setIsPlaying(false);
     };
 
     audio.addEventListener('loadedmetadata', setAudioData);
@@ -99,10 +144,6 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     audio.addEventListener('canplay', handleCanPlay);
     audio.addEventListener('error', handleError);
 
-    if (audio.readyState >= 1) {
-        setAudioData();
-    }
-
     return () => {
       audio.removeEventListener('loadedmetadata', setAudioData);
       audio.removeEventListener('timeupdate', setAudioTime);
@@ -111,13 +152,18 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
       audio.removeEventListener('canplay', handleCanPlay);
       audio.removeEventListener('error', handleError);
     };
-  }, [src, onNextTrack]);
+  }, [onNextTrack, currentUrlIndex, urlStrategies, isPlaying]);
 
   const togglePlayPause = () => {
     const audio = audioRef.current;
     if (!audio) return;
-
-    if (error) return;
+    if (error) {
+      // If clicked while error, maybe retry from start?
+      setCurrentUrlIndex(0);
+      setActiveSrc(urlStrategies[0]);
+      setError(null);
+      return;
+    }
 
     if (isPlaying) {
       audio.pause();
@@ -145,7 +191,6 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   const handleVolumeChange = (newVolume: number) => {
     const audio = audioRef.current;
     if (!audio) return;
-    
     setVolume(newVolume);
     audio.volume = newVolume;
     if (newVolume > 0 && isMuted) {
@@ -157,55 +202,39 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   const toggleMute = () => {
     const audio = audioRef.current;
     if (!audio) return;
-    
     const newMutedState = !isMuted;
     setIsMuted(newMutedState);
     audio.muted = newMutedState;
   };
 
-  const handleNext = () => {
-    if (onNextTrack) onNextTrack();
-  };
-
-  const handlePrev = () => {
-    if (onPrevTrack) onPrevTrack();
-  };
-
-  // Helper to generate the view link from the download link or API link
-  let viewLink = src;
-  if (src.includes('uc?export=download')) {
-     viewLink = src
-      .replace('uc?export=download&id=', 'file/d/')
-      .replace('&confirm=t', '/view');
-  } else if (src.includes('googleapis.com')) {
-     // Try to extract ID from API URL roughly
-     const idMatch = src.match(/files\/([^?]+)/);
-     if (idMatch && idMatch[1]) {
-       viewLink = `https://drive.google.com/file/d/${idMatch[1]}/view`;
-     }
-  }
+  const viewLink = `https://drive.google.com/file/d/${fileId}/view`;
 
   return (
     <div className="flex flex-col items-center w-full">
       <audio 
         ref={audioRef} 
-        src={src} 
+        src={activeSrc} 
         preload="auto"
         {...({ referrerPolicy: "no-referrer" } as any)}
       />
 
-      {/* Album Art Placeholder with Visualizer Effect */}
+      {/* Album Art Placeholder */}
       <div className="relative w-48 h-48 mb-8 group cursor-pointer" onClick={togglePlayPause}>
         <div className={`absolute inset-0 bg-gradient-to-tr from-cyan-500 to-purple-600 rounded-full blur-xl opacity-60 transition-all duration-700 ${isPlaying ? 'scale-110 opacity-80 animate-pulse' : 'scale-90'}`}></div>
         <div className="relative w-full h-full bg-slate-900 rounded-full border-4 border-slate-800 flex items-center justify-center overflow-hidden shadow-2xl">
            <img 
-             src="https://picsum.photos/400/400?grayscale" 
+             src={`https://picsum.photos/seed/${fileId}/400/400?grayscale`} 
              alt="Album Art" 
              className={`w-full h-full object-cover opacity-80 transition-transform duration-[20s] ease-linear ${isPlaying ? 'rotate-180 scale-110' : 'rotate-0'}`} 
            />
            {isLoading && !error && (
              <div className="absolute inset-0 bg-black/50 flex items-center justify-center backdrop-blur-sm z-10">
-               <Loader2 className="animate-spin text-white" size={32} />
+               <div className="flex flex-col items-center">
+                 <Loader2 className="animate-spin text-white mb-2" size={32} />
+                 {currentUrlIndex > 0 && (
+                   <span className="text-xs text-white/70">Intentando método {currentUrlIndex + 1}...</span>
+                 )}
+               </div>
              </div>
            )}
            {error && (
@@ -228,15 +257,28 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           <p className="text-red-200 text-sm font-medium leading-relaxed">
             {error}
           </p>
-          <a 
-            href={viewLink} 
-            target="_blank" 
-            rel="noreferrer"
-            className="flex items-center gap-2 bg-red-900/50 hover:bg-red-800/50 text-white text-xs px-4 py-2 rounded-full transition-colors border border-red-500/30"
-          >
-            <ExternalLink size={12} />
-            Abrir en Drive
-          </a>
+          <div className="flex gap-2">
+             <button 
+                onClick={() => {
+                  setCurrentUrlIndex(0);
+                  setActiveSrc(urlStrategies[0]);
+                  setError(null);
+                  setIsLoading(true);
+                }}
+                className="flex items-center gap-2 bg-white/10 hover:bg-white/20 text-white text-xs px-4 py-2 rounded-full transition-colors"
+              >
+                <RefreshCw size={12} /> Reintentar
+              </button>
+              <a 
+                href={viewLink} 
+                target="_blank" 
+                rel="noreferrer"
+                className="flex items-center gap-2 bg-red-900/50 hover:bg-red-800/50 text-white text-xs px-4 py-2 rounded-full transition-colors border border-red-500/30"
+              >
+                <ExternalLink size={12} />
+                Abrir en Drive
+              </a>
+          </div>
         </div>
       )}
 
@@ -252,8 +294,8 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
         <Controls 
           isPlaying={isPlaying} 
           onPlayPause={togglePlayPause} 
-          onSkipBack={handlePrev}
-          onSkipForward={handleNext}
+          onSkipBack={onPrevTrack || (() => {})}
+          onSkipForward={onNextTrack || (() => {})}
         />
       </div>
 
